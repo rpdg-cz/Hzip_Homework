@@ -1,4 +1,5 @@
 #ifndef HUFFMAN_H
+
 #define HUFFMAN_H
 
 #include <stdio.h>
@@ -14,6 +15,7 @@ typedef struct tnode {            //Huffman树结构
 	int weight;
 	struct tnode *left,*right;
 	int is_leaf;
+	int rank;
 } tnode;
 
 typedef struct Huffman_h {
@@ -22,6 +24,7 @@ typedef struct Huffman_h {
 	char HCode[ASCII_SIZE][MAXSIZE]; //字符的Huffman编码，如HCode['a']为字符a的Huffman编码（字符串形式） 
 	int vis_cnt;
 	FILE *Src, *Obj;
+	int vis_for_decode[ASCII_SIZE * 2];
 } Huffman_h;
 
 void init(Huffman_h *ctx);

@@ -1,17 +1,23 @@
 #include "Huffman.h"
+#include "Heap.h"
 
 tnode* new_node() {
 	tnode *p = (tnode *)malloc(sizeof(tnode));
+	if (p == NULL) {
+		fprintf(stderr, "Memory allocation failed in new_node\n");
+		exit(1);
+	}
 	p->left = p->right = NULL;
 	p->weight = 0;
 	p->c = 0;
 	p->is_leaf = 0;
+	p->rank = 0;
 	return p;
 }
 
 void init(Huffman_h *ctex) {
 	for(int i = 0; i < ASCII_SIZE; i ++)
-		ctex->Ccount[i] = 0;
+		ctex->Ccount[i] = 0, ctex->vis_for_decode[i] = 0;
 	for(int i = 0; i < 128; i ++)
 		for(int j = 0; j < MAXSIZE; j ++) {
 			ctex->HCode[i][j] = 0;
@@ -25,8 +31,9 @@ void init(Huffman_h *ctex) {
 void statCount(Huffman_h *ctex) {
 	char c;
 	while((c = fgetc(ctex->Src)) != EOF) {
-		// if(c == '\n') continue;
-		ctex->Ccount[(int)c] ++;
+		if ((unsigned char)c < ASCII_SIZE) {
+			ctex->Ccount[(unsigned char)c] ++;
+		}
 	}
 	ctex->Ccount[0] = 1;
 	fclose(ctex->Src);
@@ -35,63 +42,59 @@ void statCount(Huffman_h *ctex) {
 int cmp(const void *a, const void *b) {
 	struct tnode **p = (struct tnode **)a, **q = (struct tnode **)b;
 	if((*p) -> weight == (*q)->weight) {
-		if((*p)->c < (*q)->c) return -1;
-		else if((*p)->c > (*q)->c) return 1;
+		if((*p)->rank < (*q)->rank) return 1;
+		else if((*p)->rank > (*q)->rank) return -1;
 		else return 0;
 	}
-	else if((*p)->weight > (*q)->weight) return 1;
-	else return -1;
+	else if((*p)->weight > (*q)->weight) return -1;
+	else return 1;
 }
+
 void createHTree(Huffman_h *ctex) {
-	struct tnode *F[ASCII_SIZE * 2];
-	for(int i = 0; i < ASCII_SIZE * 2; i ++) F[i] = NULL;
-	int hd = 0, tl = 0;
+	Heap Hctex;
+	Heap_init(&Hctex, ASCII_SIZE * 2, cmp);
 	for(int i = 0; i < 128; i ++) {
 		struct tnode *p = (struct tnode *)malloc(sizeof(tnode));
+		if (p == NULL) {
+			fprintf(stderr, "Memory allocation failed in createHTree\n");
+			exit(1);
+		}
 		if(ctex->Ccount[i]) {
 			p->c = (char) i;
 			p->weight = ctex->Ccount[i];
 			p->left = p->right = NULL;
-			F[tl] = p;
-			tl ++;
+			p->rank = i;
+			push(p, &Hctex);
 			ctex->vis_cnt ++;
 		}
 	}
-	qsort(F, tl, sizeof(tnode *), cmp);
-	while(hd < tl - 1) {
-		tnode *t0 = F[hd], *t1 = F[hd + 1];
-		hd += 2;
+	int idx = 129;
+	while(Size(&Hctex) > 1) {
+		tnode *t0 = (tnode *)top(&Hctex);
+		pop(&Hctex);
+		tnode *t1 = (tnode *)top(&Hctex);
+		pop(&Hctex);
 		tnode *q = (tnode *)malloc(sizeof(tnode));
+		if (q == NULL) {
+			fprintf(stderr, "Memory allocation failed in createHTree\n");
+			exit(1);
+		}
 		q->weight = t0->weight + t1->weight;
+		q->c = 128;
 		q->left = t0;
 		q->right = t1;
-		int pos = hd - 2;
-		for(int i = hd; i < tl; i ++) {
-			if(F[i]->weight > q->weight) {
-				pos = i - 1;
-				break;
-			}
-		}
-		if(pos == hd - 1) {
-			hd --;
-			F[hd] = q;
-		}
-		else if(pos == hd - 2) {
-			F[tl] = q;
-			tl ++;
-		}
-		else {
-			for(int i = tl; i > pos + 1; i --) {
-				F[i] = F[i - 1];
-			}
-			F[pos + 1] = q;
-			tl ++;
-		}
+		q->rank = ++idx;
+		push(q, &Hctex);
 	}
-	ctex->Root = F[hd];
+	ctex->Root = top(&Hctex);
+	Heap_delete(&Hctex);
 }
 
 void dfs1(struct tnode *x, char path[], int cnt, Huffman_h *ctex) {
+	if (cnt >= MAXSIZE) {
+		fprintf(stderr, "Huffman code too long\n");
+		exit(1);
+	}
 	if(!x->left && !x->right) {
 		path[cnt] = '\0';
 		strcpy(ctex->HCode[x->c], path);
@@ -118,8 +121,8 @@ void atoHZIP(Huffman_h *ctex) {
 	unsigned char hc = 0;
 	int i = 0;
 	while((c = fgetc(ctex->Src)) != EOF) {
-		for(int k = 0; k < strlen(ctex->HCode[c]); k++,i++) {
-			hc = (hc << 1)|(ctex->HCode[c][k] - '0');
+		for(int k = 0; k < strlen(ctex->HCode[(unsigned char)c]); k++,i++) {
+			hc = (hc << 1)|(ctex->HCode[(unsigned char)c][k] - '0');
 			if((i + 1) % 8 == 0) {
 				fputc(hc, ctex->Obj);
 			}
@@ -141,23 +144,30 @@ void atoHZIP(Huffman_h *ctex) {
 }
 
 void print_tab(Huffman_h *ctex) {
+	if (ctex->vis_cnt > 255) {
+		fprintf(stderr, "Too many visible characters\n");
+		exit(1);
+	}
 	char c;
 	char hc = 0;
 	fputc((char)ctex->vis_cnt, ctex->Obj);
 	for(int i = 0; i < 128; i ++) {
 		if(ctex->Ccount[i]) {
 			fputc((char)i, ctex->Obj);
-			fputc((char)strlen(ctex->HCode[i]), ctex->Obj);
+			int len = strlen(ctex->HCode[i]);
+			if (len > 255) {
+				fprintf(stderr, "Huffman code too long for char %d\n", i);
+				exit(1);
+			}
+			fputc((char)len, ctex->Obj);
 			int r = 0;
-			for(int k = 0; k < strlen(ctex->HCode[i]); k++,r++) {
+			for(int k = 0; k < len; k++,r++) {
 				hc = (hc << 1)|(ctex->HCode[i][k] - '0');
 				if((r + 1) % 8 == 0) {
 					fputc(hc, ctex->Obj);
-					// printf("%x", hc);
 				}
 			}
 			int flg = 0;
-			// printf("%d %d %d\n", i, strlen(HCode[i]), r);
 			while(r%8 != 0) {
 				hc = hc << 1;
 				r++;
@@ -168,29 +178,47 @@ void print_tab(Huffman_h *ctex) {
 	}
 }
 
-int vis[ASCII_SIZE + 2];
-
 void get_code(Huffman_h *ctex) {
 	char c;
 	c = fgetc(ctex->Src);
+	if (c == EOF) {
+		fprintf(stderr, "Unexpected EOF in get_code\n");
+		exit(1);
+	}
 	for(int i = 0; i < (int)c; i ++) {
 		char rec = fgetc(ctex->Src);
+		if (rec == EOF) {
+			fprintf(stderr, "Unexpected EOF in get_code\n");
+			exit(1);
+		}
 		char len = fgetc(ctex->Src);
+		if (len == EOF) {
+			fprintf(stderr, "Unexpected EOF in get_code\n");
+			exit(1);
+		}
 		int lenc = 0;
 		for(int j = 1; j <= len/8; j ++) {
 			char code = fgetc(ctex->Src);
+			if (code == EOF) {
+				fprintf(stderr, "Unexpected EOF in get_code\n");
+				exit(1);
+			}
 			for(int k = 7; k >= 0; k --) {
 				ctex->HCode[rec][lenc++] = (char)((code >> k) & 1) + '0';
 			}
 		}
 		if(len % 8 != 0) {
 			char code = fgetc(ctex->Src);
+			if (code == EOF) {
+				fprintf(stderr, "Unexpected EOF in get_code\n");
+				exit(1);
+			}
 			for(int k = 7; k >= 8 - (len%8); k --) {
 				ctex->HCode[rec][lenc++] = (char)((code >> k) & 1) + '0';
 			}
 		}
 		ctex->HCode[rec][lenc] = '\0';
-		vis[rec] = 1;
+		ctex->vis_for_decode[rec] = 1;
 	}
 }
 
@@ -213,6 +241,10 @@ void insert(char str[], char c, Huffman_h *ctex) {
 		cur = ctex->Root;
 	}
 	for(int i = 0; i < strlen(str); i ++) {
+		if (str[i] != '0' && str[i] != '1') {
+			fprintf(stderr, "Invalid character in Huffman code: %c\n", str[i]);
+			exit(1);
+		}
 		int pos = str[i] - '0';
 		if(pos == 0) {
 			if(!cur->left) {
@@ -234,7 +266,7 @@ void insert(char str[], char c, Huffman_h *ctex) {
 
 void rebuild_HTree(Huffman_h *ctex) {
 	for(int i = 0; i < 128; i ++) {
-		if(vis[i]) {
+		if(ctex->vis_for_decode[i]) {
 			insert(ctex->HCode[i], (char)i, ctex);
 		}
 	}
@@ -256,9 +288,17 @@ void HZIP_to_a(Huffman_h *ctex) {
 				cur = ctex->Root;
 			}
 			if(v == 0) {
+				if (cur->left == NULL) {
+					fprintf(stderr, "Invalid Huffman code: left child is NULL\n");
+					exit(1);
+				}
 				cur = cur->left;
 			}
 			if(v == 1) {
+				if (cur->right == NULL) {
+					fprintf(stderr, "Invalid Huffman code: right child is NULL\n");
+					exit(1);
+				}
 				cur = cur->right;
 			}
 		}
@@ -292,9 +332,15 @@ char **get_file_name_and_extension(char str[]) {
 		file_len ++;
 	}
 	file_name = (char *)malloc((file_len + 2) * sizeof(char));
-	check(file_name);
+	if (file_name == NULL) {
+		fprintf(stderr, "Memory allocation failed in get_file_name_and_extension\n");
+		exit(1);
+	}
 	extension = (char *)malloc((strlen(str) - file_len + 2) * sizeof(char));
-	check(extension);
+	if (extension == NULL) {
+		fprintf(stderr, "Memory allocation failed in get_file_name_and_extension\n");
+		exit(1);
+	}
 	for(int i = 0; i < file_len; i ++) {
 		file_name[i] = str[i];
 	}
@@ -305,7 +351,10 @@ char **get_file_name_and_extension(char str[]) {
 	extension[strlen(str) - file_len - 1] = '\0';
 	char **pair;
 	pair = (char **)malloc(2 * sizeof(char *));
-	check(pair);
+	if (pair == NULL) {
+		fprintf(stderr, "Memory allocation failed in get_file_name_and_extension\n");
+		exit(1);
+	}
 	pair[0] = file_name;
 	pair[1] = extension;
 	return pair;
@@ -313,6 +362,10 @@ char **get_file_name_and_extension(char str[]) {
 char *change_extension(char file_name[], char ex[]) {
 	char *output;
 	output = (char *)malloc((strlen(file_name) + strlen(ex) + 5)*sizeof(char));
+	if (output == NULL) {
+		fprintf(stderr, "Memory allocation failed in change_extension\n");
+		exit(1);
+	}
 	int len = strlen(file_name);
 	for(int i = 0; i < len; i ++) {
 		output[i] = file_name[i];
@@ -336,7 +389,7 @@ int encode(int argc, char *argv[], Huffman_h *ctex) {
 		return -1;
 	}
 	char *output = change_extension(file_name, "hzip");
-	ctex->Obj = fopen(output, "w");
+	ctex->Obj = fopen(output, "wb");
 	if(ctex->Obj == NULL) {
 		perror("File can't be found!!!");
 		return -1;
@@ -365,7 +418,6 @@ int decode(int argc, char *argv[], Huffman_h *ctex) {
 	char **pair = get_file_name_and_extension(argv[2]);
 	int file_len = 0;
 	char *file_name = pair[0], *extension = pair[1];
-	
 	if(strcmp(extension, "hzip") != 0) {
 		perror("File extension error!");
 		return -1;
